@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-const char *FILENAME = "./data/fat16_4sectorpercluster.img";
+const char *FILENAME = "./data/test.img";
 
 typedef struct fat_BS {
   unsigned char bootjmp[3];
@@ -37,9 +37,67 @@ typedef struct root_directory_file {
   unsigned char last_modification_time[2];
   unsigned char last_modification_date[2];
   unsigned short low_16_bits;
-  unsigned char size[4];
-
+  int size;
 } __attribute__((packed)) root_directory_file;
+
+unsigned short *read_fat_file(root_directory_file *file, int fat_table_position,
+                              FILE *file_pointer) {
+  unsigned short file_first_cluster;
+  unsigned short *file_clusters =
+      (unsigned short *)malloc(1 * sizeof(unsigned short));
+  fseek(file_pointer, fat_table_position + (file->low_16_bits) * 2, SEEK_SET);
+  if (file_clusters == NULL) {
+    printf("Error allocating");
+  }
+
+  file_clusters[0] = file->low_16_bits;
+
+  short k = 1;
+
+  while (
+      fread(&file_first_cluster, sizeof(file_first_cluster), 1, file_pointer) &&
+      file_first_cluster != 0xFFFF && file_first_cluster != 0x0) {
+    file_clusters[k] = file_first_cluster;
+    file_clusters = (unsigned short *)realloc(file_clusters,
+                                              (k + 1) * sizeof(unsigned short));
+    if (file_clusters == NULL) {
+      printf("Error reallocating file");
+    }
+    fseek(file_pointer, fat_table_position + file_clusters[k] * 2, SEEK_SET);
+    k++;
+  }
+
+  for (int c = 0; c < k; c++) {
+    printf("%hu -> ", file_clusters[c]);
+  }
+  printf("\n");
+  return file_clusters;
+}
+
+void read_file_data(unsigned short *fat_pos, FILE *file_pointer,
+                    int first_data_sector, int sectors_per_cluster,
+                    int bytes_per_sector, int size) {
+  int cluster_size = bytes_per_sector * sectors_per_cluster;
+  printf("first data sector %hd\n", first_data_sector);
+  int c = 0;
+  printf("file size: %d\n", size);
+  while (1) {
+    if (fat_pos[c] == 0) {
+      break;
+    }
+    int current_data_sector =
+        (((fat_pos[c] - 2) * sectors_per_cluster) + first_data_sector) *
+        bytes_per_sector;
+
+    fseek(file_pointer, current_data_sector, SEEK_SET);
+    char *just_testing = malloc(cluster_size);
+    fread(just_testing, cluster_size, 1, file_pointer);
+
+    for (int c = 0; c < cluster_size; c++) {
+      printf("%c", just_testing[c]);
+    }
+  }
+}
 
 int main() {
 
@@ -57,43 +115,57 @@ int main() {
       boot_record.bytes_per_sector * boot_record.reserved_sector_count +
       boot_record.bytes_per_sector * boot_record.table_size_16 *
           boot_record.table_count;
+  printf("Root dir location: %d \n", root_location);
 
   printf("================================\n");
   printf("Bytes per sector: %hu\n", boot_record.bytes_per_sector);
   printf("Sectors per cluster: %hu\n", boot_record.sectors_per_cluster);
   printf("Reserved sectors: %hu\n", boot_record.reserved_sector_count);
-  printf("Number of root entries: %hu\n", boot_record.root_entry_count);
+  printf("Root entry count: %hu\n", boot_record.root_entry_count);
+  printf("Table size: %hu\n", boot_record.table_size_16);
 
   int fat_table_position =
-      boot_record.reserved_sector_count * boot_record.table_count;
+      boot_record.reserved_sector_count * boot_record.bytes_per_sector;
+  int root_dir_sectors = ((boot_record.root_entry_count * 32) +
+                          (boot_record.bytes_per_sector - 1)) /
+                         boot_record.bytes_per_sector;
+
+  int first_data_sector =
+      boot_record.reserved_sector_count +
+      (boot_record.table_count * boot_record.table_size_16) + root_dir_sectors;
+
+  int data_sectors = boot_record.total_sectors_16 -
+                     (boot_record.reserved_sector_count +
+                      (boot_record.table_count * boot_record.table_size_16) +
+                      root_dir_sectors);
 
   fseek(file_pointer, root_location, SEEK_SET);
 
   root_directory_file rf;
+  root_directory_file first_file;
   int k = 0;
+
   for (int c = 0; c < boot_record.root_entry_count; c++) {
     fread(&rf, sizeof(rf), 1, file_pointer);
     if (!(rf.file_type == 0x0F) && !(rf.file_type == 0)) {
-      printf("%d.", k++);
+      printf("%d.", k);
       rf.file_type == 0x20 ? printf("(FIL)") : printf("(DIR)");
       printf("%s\n", rf.file_name);
 
-      // reading file 01
-      if (k == 1) {
-        int file_position = rf.low_16_bits * 2 + fat_table_position;
-        unsigned short current_cluster = 1;
-        fseek(file_pointer, file_position, SEEK_SET);
-        unsigned short *file_cluster = malloc(current_cluster);
-        unsigned short current_file_cluster;
-        fread(&current_file_cluster, 2, 1, file_pointer);
-        if (current_file_cluster == 0xFFFF) {
-          break;
-        } else {
-          file_cluster = realloc(file_cluster, ++current_cluster);
-        }
+      if (k == 3) {
+        first_file = rf;
       }
+      k++;
     }
   }
+  unsigned short *fat_table_positions =
+      read_fat_file(&first_file, fat_table_position, file_pointer);
+
+  printf("asdfasdfsdaf %d", first_file.size);
+
+  read_file_data(fat_table_positions, file_pointer, first_data_sector,
+                 boot_record.sectors_per_cluster, boot_record.bytes_per_sector,
+                 first_file.size);
 
   fclose(file_pointer);
 }
