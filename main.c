@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-const char *FILENAME = "./data/test.img";
+const char *FILENAME = "./data/pendrive128.img";
 
 typedef struct fat_BS {
   unsigned char bootjmp[3];
@@ -42,32 +42,43 @@ typedef struct root_directory_file {
 
 unsigned short *read_fat_file(root_directory_file *file, int fat_table_position,
                               FILE *file_pointer) {
-  unsigned short file_first_cluster;
+  unsigned short current_cluster = file->low_16_bits;
   unsigned short *file_clusters =
       (unsigned short *)malloc(1 * sizeof(unsigned short));
   fseek(file_pointer, fat_table_position + (file->low_16_bits) * 2, SEEK_SET);
+
   if (file_clusters == NULL) {
     printf("Error allocating");
   }
 
-  file_clusters[0] = file->low_16_bits;
+  short cluster_pos = 0;
+  file_clusters[cluster_pos] = current_cluster;
 
-  short k = 1;
+  while (1) {
+    int cluster_location = fat_table_position + current_cluster * 2;
+    fseek(file_pointer, cluster_location, SEEK_SET);
+    fread(&current_cluster, sizeof(current_cluster), 1, file_pointer);
 
-  while (
-      fread(&file_first_cluster, sizeof(file_first_cluster), 1, file_pointer) &&
-      file_first_cluster != 0xFFFF && file_first_cluster != 0x0) {
-    file_clusters[k] = file_first_cluster;
-    file_clusters = (unsigned short *)realloc(file_clusters,
-                                              (k + 1) * sizeof(unsigned short));
+    printf("aaaaa  %hu\n", current_cluster);
+
+    if (current_cluster == 0xFFFF) {
+      printf("%hu\n", cluster_pos);
+      break;
+    }
+
+    cluster_pos++;
+    file_clusters = (unsigned short *)realloc(
+        file_clusters, (cluster_pos + 1) * sizeof(unsigned short));
+    file_clusters[cluster_pos - 1] = current_cluster;
+    // printf("%hu - ", current_cluster);
+
     if (file_clusters == NULL) {
       printf("Error reallocating file");
     }
-    fseek(file_pointer, fat_table_position + file_clusters[k] * 2, SEEK_SET);
-    k++;
   }
 
-  for (int c = 0; c < k; c++) {
+  printf("%hu", cluster_pos);
+  for (int c = 0; c < cluster_pos; c++) {
     printf("%hu -> ", file_clusters[c]);
   }
   printf("\n");
@@ -95,7 +106,13 @@ void read_file_data(unsigned short *fat_pos, FILE *file_pointer,
 
     for (int c = 0; c < cluster_size; c++) {
       printf("%c", just_testing[c]);
+      size--;
+      if (size == 0) {
+        printf("END OF FILE-------------");
+        break;
+      }
     }
+    c++;
   }
 }
 
@@ -147,12 +164,12 @@ int main() {
 
   for (int c = 0; c < boot_record.root_entry_count; c++) {
     fread(&rf, sizeof(rf), 1, file_pointer);
-    if (!(rf.file_type == 0x0F) && !(rf.file_type == 0)) {
+    if (!(rf.file_type == 0x0F) && !(rf.file_type == 0) &&
+        !(rf.file_name[0] == 0xE5)) {
       printf("%d.", k);
       rf.file_type == 0x20 ? printf("(FIL)") : printf("(DIR)");
       printf("%s\n", rf.file_name);
-
-      if (k == 3) {
+      if (k == 7) {
         first_file = rf;
       }
       k++;
@@ -160,8 +177,6 @@ int main() {
   }
   unsigned short *fat_table_positions =
       read_fat_file(&first_file, fat_table_position, file_pointer);
-
-  printf("asdfasdfsdaf %d", first_file.size);
 
   read_file_data(fat_table_positions, file_pointer, first_data_sector,
                  boot_record.sectors_per_cluster, boot_record.bytes_per_sector,
