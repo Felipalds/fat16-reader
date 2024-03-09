@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-
-const char *FILENAME = "./data/pendrive128.img";
+#include <string.h>
 
 typedef struct fat_BS {
   unsigned char bootjmp[3];
@@ -18,9 +17,6 @@ typedef struct fat_BS {
   unsigned short head_side_count;
   unsigned int hidden_sector_count;
   unsigned int total_sectors_32;
-
-  // this will be cast to it's specific type once the driver actually knows what
-  // type of FAT this is.
   unsigned char extended_section[54];
 
 } __attribute__((packed)) fat_BS_t;
@@ -45,7 +41,6 @@ unsigned short *read_fat_file(root_directory_file *file, int fat_table_position,
   unsigned short current_cluster = file->low_16_bits;
   unsigned short *file_clusters =
       (unsigned short *)malloc(1 * sizeof(unsigned short));
-  fseek(file_pointer, fat_table_position + (file->low_16_bits) * 2, SEEK_SET);
 
   if (file_clusters == NULL) {
     printf("Error allocating");
@@ -59,17 +54,14 @@ unsigned short *read_fat_file(root_directory_file *file, int fat_table_position,
     fseek(file_pointer, cluster_location, SEEK_SET);
     fread(&current_cluster, sizeof(current_cluster), 1, file_pointer);
 
-    printf("aaaaa  %hu\n", current_cluster);
-
     if (current_cluster == 0xFFFF) {
-      printf("%hu\n", cluster_pos);
       break;
     }
 
     cluster_pos++;
     file_clusters = (unsigned short *)realloc(
         file_clusters, (cluster_pos + 1) * sizeof(unsigned short));
-    file_clusters[cluster_pos - 1] = current_cluster;
+    file_clusters[cluster_pos] = current_cluster;
     // printf("%hu - ", current_cluster);
 
     if (file_clusters == NULL) {
@@ -77,11 +69,10 @@ unsigned short *read_fat_file(root_directory_file *file, int fat_table_position,
     }
   }
 
-  printf("%hu", cluster_pos);
-  for (int c = 0; c < cluster_pos; c++) {
-    printf("%hu -> ", file_clusters[c]);
-  }
-  printf("\n");
+  // for (int c = 0; c < cluster_pos; c++) {
+  //   printf("%hu -> ", file_clusters[c]);
+  // }
+  // printf("\n");
   return file_clusters;
 }
 
@@ -89,9 +80,9 @@ void read_file_data(unsigned short *fat_pos, FILE *file_pointer,
                     int first_data_sector, int sectors_per_cluster,
                     int bytes_per_sector, int size) {
   int cluster_size = bytes_per_sector * sectors_per_cluster;
-  printf("first data sector %hd\n", first_data_sector);
+  int file_size = size;
+  // printf("first data sector %d\n", first_data_sector);
   int c = 0;
-  printf("file size: %d\n", size);
   while (1) {
     if (fat_pos[c] == 0) {
       break;
@@ -101,23 +92,36 @@ void read_file_data(unsigned short *fat_pos, FILE *file_pointer,
         bytes_per_sector;
 
     fseek(file_pointer, current_data_sector, SEEK_SET);
-    char *just_testing = malloc(cluster_size);
-    fread(just_testing, cluster_size, 1, file_pointer);
+    char *current_file = malloc(cluster_size);
+    fread(current_file, cluster_size, 1, file_pointer);
 
     for (int c = 0; c < cluster_size; c++) {
-      printf("%c", just_testing[c]);
-      size--;
-      if (size == 0) {
-        printf("END OF FILE-------------");
+      printf("%c", current_file[c]);
+      file_size = file_size - 1;
+      if (file_size == 0) {
         break;
       }
     }
     c++;
   }
+  printf("\n");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
 
+  if (argc == 1) {
+    printf("Filename not provided. Please run ./main ./PATH/TO/FILE.img and "
+           "try again.\n");
+    exit(1);
+  }
+
+  const char *FILENAME = argv[1];
+
+  if (strlen(FILENAME) == 0 || FILENAME == NULL) {
+    printf("Filename not provided. Please run ./main ./PATH/TO/FILE.img and "
+           "try again.\n");
+    exit(1);
+  }
   fat_BS_t boot_record;
 
   FILE *file_pointer;
@@ -132,14 +136,18 @@ int main() {
       boot_record.bytes_per_sector * boot_record.reserved_sector_count +
       boot_record.bytes_per_sector * boot_record.table_size_16 *
           boot_record.table_count;
-  printf("Root dir location: %d \n", root_location);
 
-  printf("================================\n");
+  system("clear");
+  printf("\n========= FAT 16 READER =========\n");
+  printf("     By: Luiz Felipe F. Rosa\n");
+  printf("=================================\n");
+  printf("Root dir location: %d \n", root_location);
   printf("Bytes per sector: %hu\n", boot_record.bytes_per_sector);
   printf("Sectors per cluster: %hu\n", boot_record.sectors_per_cluster);
   printf("Reserved sectors: %hu\n", boot_record.reserved_sector_count);
   printf("Root entry count: %hu\n", boot_record.root_entry_count);
   printf("Table size: %hu\n", boot_record.table_size_16);
+  printf("Fat numbers: %hu\n", boot_record.table_count);
 
   int fat_table_position =
       boot_record.reserved_sector_count * boot_record.bytes_per_sector;
@@ -160,27 +168,47 @@ int main() {
 
   root_directory_file rf;
   root_directory_file first_file;
+  root_directory_file *files = malloc(1 * sizeof(root_directory_file));
   int k = 0;
 
   for (int c = 0; c < boot_record.root_entry_count; c++) {
     fread(&rf, sizeof(rf), 1, file_pointer);
     if (!(rf.file_type == 0x0F) && !(rf.file_type == 0) &&
         !(rf.file_name[0] == 0xE5)) {
-      printf("%d.", k);
-      rf.file_type == 0x20 ? printf("(FIL)") : printf("(DIR)");
-      printf("%s\n", rf.file_name);
-      if (k == 7) {
-        first_file = rf;
-      }
+      files[k] = rf;
       k++;
+      files = realloc(files, (k + 1) * sizeof(root_directory_file));
     }
   }
-  unsigned short *fat_table_positions =
-      read_fat_file(&first_file, fat_table_position, file_pointer);
 
-  read_file_data(fat_table_positions, file_pointer, first_data_sector,
-                 boot_record.sectors_per_cluster, boot_record.bytes_per_sector,
-                 first_file.size);
+  int option;
+  while (1) {
+    printf("===================\n");
+    for (int c = 0; c < k; c++) {
+      printf("%d. ", c);
+      files[c].file_type == 0x20 ? printf("(FIL)") : printf("(DIR)");
+      printf("%s %d bytes | cluster %hd\n", files[c].file_name, files[c].size,
+             files[c].low_16_bits);
+    }
+
+    printf("Which one do you want to read? (-1 to exit) \n");
+    scanf("%d", &option);
+    system("clear");
+    if (option < 0)
+      break;
+
+    if (option >= k) {
+      printf("Type a valid option!");
+      continue;
+    }
+
+    unsigned short *fat_table_positions =
+        read_fat_file(&files[option], fat_table_position, file_pointer);
+
+    read_file_data(fat_table_positions, file_pointer, first_data_sector,
+                   boot_record.sectors_per_cluster,
+                   boot_record.bytes_per_sector, files[option].size);
+  }
 
   fclose(file_pointer);
 }
